@@ -1,0 +1,37 @@
+function Get-ARMVM-STATUS-ADD-DISC
+{
+  $RGs = Get-AzureRMResourceGroup
+  foreach($RG in $RGs)
+  {
+    $VMs = Get-AzureRmVM -ResourceGroupName $RG.ResourceGroupName
+    foreach($VM in $VMs)
+    {
+      $VMDetail = Get-AzureRmVM -ResourceGroupName $RG.ResourceGroupName -Name $VM.Name -Status
+      $RGN = $VMDetail.ResourceGroupName  
+      foreach ($VMStatus in $VMDetail.Statuses)
+      { 
+          $VMStatusDetail = $VMStatus.DisplayStatus
+      }
+      Write-Output "Resource Group: $RGN", ("VM Name: " + $VM.Name), "Current Status: $VMStatusDetail" `n
+      if ($VMStatusDetail -eq "VM deallocated") 
+      {
+      
+      	$rgName = 'myResourceGroup'
+		$vmName = $VM.Name
+		$location = 'East US' 
+		$storageType = 'Standard_LRS'
+		$dataDiskName = $vmName + '_datadisk1'
+
+		$diskConfig = New-AzDiskConfig -SkuName $storageType -Location $location -CreateOption Empty -DiskSizeGB 5
+		$dataDisk1 = New-AzDisk -DiskName $dataDiskName -Disk $diskConfig -ResourceGroupName $rgName
+
+		$vm = Get-AzVM -Name $vmName -ResourceGroupName $rgName 
+		$vm = Add-AzVMDataDisk -VM $vm -Name $dataDiskName -CreateOption Attach -ManagedDiskId $dataDisk1.Id -Lun 1
+
+		Update-AzVM -VM $vm -ResourceGroupName $rgName
+      
+      Write-Output "Data disk added!" `n
+      }
+    }
+  }
+}

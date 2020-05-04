@@ -1,0 +1,245 @@
+# Define variables for resource names
+$resourceGroupName = "myResourceGroupPS"
+$location = "EastUS"
+
+# Create a resource group
+New-AzResourceGroup -ResourceGroupName $resourceGroupName -Location $location
+
+#######################Web Tier#########################
+
+$webScaleSetName = "myWebScaleSet"
+
+# Create a virtual network subnet - for web tier
+$subnet_web = New-AzVirtualNetworkSubnetConfig `
+  -Name "myWebSubnet" `
+  -AddressPrefix 10.0.1.0/24
+
+# Create a virtual network subnet - for app tier
+$subnet_app = New-AzVirtualNetworkSubnetConfig `
+  -Name "myAppSubnet" `
+  -AddressPrefix 10.0.2.0/24
+
+
+
+# Create a virtual network subnet - for Data tier
+$subnet_data = New-AzVirtualNetworkSubnetConfig `
+  -Name "myDataSubnet" `
+  -AddressPrefix 10.0.3.0/24
+
+# Create a virtual network
+$vnet = New-AzVirtualNetwork `
+  -ResourceGroupName $resourceGroupName `
+  -Name "myVnet" `
+  -Location $location `
+  -AddressPrefix 10.0.0.0/16 `
+  -Subnet $subnet_web,$subnet_app,$subnet_data
+
+# Create a public IP address
+$publicIP = New-AzPublicIpAddress `
+  -ResourceGroupName $resourceGroupName `
+  -Location $location `
+  -AllocationMethod Static `
+  -Name "myPublicIP"
+
+# Create a frontend and backend IP pool
+$frontendIP = New-AzLoadBalancerFrontendIpConfig `
+  -Name "myFrontEndPool" `
+  -PublicIpAddress $publicIP
+$backendPool = New-AzLoadBalancerBackendAddressPoolConfig -Name "myBackEndPool"
+
+# Create the web load balancer
+$lb = New-AzLoadBalancer `
+  -ResourceGroupName $resourceGroupName `
+  -Name "myWebLoadBalancer" `
+  -Location $location `
+  -FrontendIpConfiguration $frontendIP `
+  -BackendAddressPool $backendPool `
+
+# Create a load balancer health probe for TCP port 80
+Add-AzLoadBalancerProbeConfig -Name "myHealthProbe" `
+  -LoadBalancer $lb `
+  -Protocol TCP `
+  -Port 80 `
+  -IntervalInSeconds 15 `
+  -ProbeCount 2
+
+# Create a load balancer rule to distribute traffic on port TCP 80
+# The health probe from the previous step is used to make sure that traffic is
+# only directed to healthy VM instances
+Add-AzLoadBalancerRuleConfig `
+  -Name "myWebLoadBalancerRule" `
+  -LoadBalancer $lb `
+  -FrontendIpConfiguration $lb.FrontendIpConfigurations[0] `
+  -BackendAddressPool $lb.BackendAddressPools[0] `
+  -Protocol TCP `
+  -FrontendPort 80 `
+  -BackendPort 80 `
+  -Probe (Get-AzLoadBalancerProbeConfig -Name "myHealthProbe" -LoadBalancer $lb)
+
+# Update the load balancer configuration
+Set-AzLoadBalancer -LoadBalancer $lb
+
+# Create IP address configurations
+$ipConfig = New-AzVmssIpConfig `
+  -Name "myIPConfig" `
+  -LoadBalancerBackendAddressPoolsId $lb.BackendAddressPools[0].Id `
+  -LoadBalancerInboundNatPoolsId $inboundNATPool.Id `
+  -SubnetId $vnet.Subnets[0].Id
+
+# Create a config object
+# The web scale set config object stores the core information for creating a scale set (capacity 2)
+$webScaleConfig = New-AzVmssConfig `
+    -Location $location `
+    -SkuCapacity 2 `
+    -SkuName "Standard_DS2" `
+    -UpgradePolicyMode "Automatic"
+
+# Reference a virtual machine image from the gallery
+Set-AzVmssStorageProfile $vmssConfig `
+  -OsDiskCreateOption "FromImage" `
+  -ImageReferencePublisher "Canonical" `
+  -ImageReferenceOffer "UbuntuServer" `
+  -ImageReferenceSku "16.04-LTS" `
+  -ImageReferenceVersion "latest"
+
+# Set up information for authenticating with the virtual machine
+Set-AzVmssOsProfile $webScaleConfig `
+  -AdminUsername "Sk123nm" `
+  -AdminPassword "Sk$123nm" `
+  -ComputerNamePrefix "myWebVM"
+
+# Attach the virtual network to the config object
+Add-AzVmssNetworkInterfaceConfiguration `
+  -VirtualMachineScaleSet $webScaleConfig `
+  -Name "network-config" `
+  -Primary $true `
+  -IPConfiguration $ipConfig
+
+# Create the scale set with the config object
+New-AzVmss `
+  -ResourceGroupName $resourceGroupName `
+  -Name $webScaleSetName `
+  -VirtualMachineScaleSet $webScaleConfig
+
+###################App Tier##################
+
+$appScaleSetName = "myAppScaleSet"
+
+#Create bakend IP pool
+$backendPool_app = New-AzLoadBalancerBackendAddressPoolConfig -Name "myAppBackEndPool"
+
+# Create the app load balancer
+$lb_app = New-AzLoadBalancer `
+  -ResourceGroupName $resourceGroupName `
+  -Name "myAppLoadBalancer" `
+  -Location $location `
+  -BackendAddressPool $backendPool_app `
+
+# Create IP address configurations
+$ipConfig_app = New-AzVmssIpConfig `
+  -Name "myAppIPConfig" `
+  -LoadBalancerBackendAddressPoolsId $lb_app.BackendAddressPools[0].Id `
+  -SubnetId $vnet.Subnets[1].Id
+
+# Create a config object
+# The app scale set config object stores the core information for creating a scale set (capacity 3)
+$appScaleConfig = New-AzVmssConfig `
+    -Location $location `
+    -SkuCapacity 3 `
+    -SkuName "Standard_DS2" `
+    -UpgradePolicyMode "Automatic"
+
+# Reference a virtual machine image from the gallery
+Set-AzVmssStorageProfile $appScaleConfig `
+  -OsDiskCreateOption "FromImage" `
+  -ImageReferencePublisher "Canonical" `
+  -ImageReferenceOffer "UbuntuServer" `
+  -ImageReferenceSku "16.04-LTS" `
+  -ImageReferenceVersion "latest"
+
+# Set up information for authenticating with the virtual machine
+Set-AzVmssOsProfile $appScaleConfig `
+  -AdminUsername "Sk123nm" `
+  -AdminPassword "Sk$123nm" `
+  -ComputerNamePrefix "myAppVM"
+
+# Attach the virtual network to the config object
+Add-AzVmssNetworkInterfaceConfiguration `
+  -VirtualMachineScaleSet $appScaleConfig `
+  -Name "network-config" `
+  -Primary $true `
+  -IPConfiguration $ipConfig_app
+
+# Create the scale set with the config object
+New-AzVmss `
+  -ResourceGroupName $resourceGroupName `
+  -Name $appScaleSetName `
+  -VirtualMachineScaleSet $appScaleConfig
+
+
+###################Data Tier##################
+
+$dataScaleSetName = "myDataScaleSet"
+
+#Create bakend IP pool
+$backendPool_data = New-AzLoadBalancerBackendAddressPoolConfig -Name "myDataBackEndPool"
+
+# Create the data load balancer
+$lb_data = New-AzLoadBalancer `
+  -ResourceGroupName $resourceGroupName `
+  -Name "myDataLoadBalancer" `
+  -Location $location `
+  -BackendAddressPool $backendPool_data `
+
+# Create IP address configurations
+$ipConfig_data = New-AzVmssIpConfig `
+  -Name "myDataIPConfig" `
+  -LoadBalancerBackendAddressPoolsId $lb_data.BackendAddressPools[0].Id `
+  -SubnetId $vnet.Subnets[2].Id
+
+# Create a config object
+# The data scale set config object stores the core information for creating a scale set (capacity 2)
+$dataScaleConfig = New-AzVmssConfig `
+    -Location $location `
+    -SkuCapacity 2 `
+    -SkuName "Premium_LRS" `
+    -UpgradePolicyMode "Automatic"
+
+# Reference a virtual machine image from the gallery
+Set-AzVmssStorageProfile $dataScaleConfig `
+  -OsDiskCreateOption "FromImage" `
+  -ImageReferencePublisher "Canonical" `
+  -ImageReferenceOffer "UbuntuServer" `
+  -ImageReferenceSku "16.04-LTS" `
+  -ImageReferenceVersion "latest"
+
+# Set up information for authenticating with the virtual machine
+Set-AzVmssOsProfile $dataScaleConfig `
+  -AdminUsername "Sk123nm" `
+  -AdminPassword "Sk$123nm" `
+  -ComputerNamePrefix "myDataVM"
+
+# Attach the virtual network to the config object
+Add-AzVmssNetworkInterfaceConfiguration `
+  -VirtualMachineScaleSet $dataScaleConfig `
+  -Name "network-config" `
+  -Primary $true `
+  -IPConfiguration $ipConfig_data
+
+# Create the scale set with the config object
+New-AzVmss `
+  -ResourceGroupName $resourceGroupName `
+  -Name $dataScaleSetName `
+  -VirtualMachineScaleSet $dataScaleConfig
+
+
+
+
+
+
+
+
+
+
+
+
